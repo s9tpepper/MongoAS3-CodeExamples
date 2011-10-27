@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009"
+			   xmlns:s="library://ns.adobe.com/flex/spark"
+			   xmlns:mx="library://ns.adobe.com/flex/mx"
+			   minWidth="955"
+			   minHeight="600"
+			   creationComplete="onCreationComplete(event)">
+	<fx:Script>
+		<![CDATA[
+			import as3.mongo.Mongo;
+			import as3.mongo.db.DB;
+			import as3.mongo.db.credentials.Credentials;
+			import as3.mongo.db.document.Document;
+			import as3.mongo.wire.cursor.Cursor;
+			import as3.mongo.wire.messages.database.FindOneResult;
+			import as3.mongo.wire.messages.database.OpReply;
+
+			import mx.collections.ArrayCollection;
+			import mx.controls.Alert;
+			import mx.events.FlexEvent;
+			import mx.utils.Base64Encoder;
+			import mx.utils.ObjectUtil;
+
+			private var mongo:Mongo;
+			private var mongoDB:DB;
+
+			protected function onCreationComplete(event:FlexEvent):void
+			{
+				// Starts a Mongo object pointed to the correct host (localhost for this example)
+				// and gets a reference to a DB object using the 'mongoas3_intro' database.
+				initializeMongoDB();
+
+
+				// Sets up the connected and connectionFailed signals with callbacks to handle
+				// those callbacks and then establishes a connection with MongoDB.
+				connectMongoDB();
+			}
+
+			private function initializeMongoDB():void
+			{
+				// Change host to your MongoDB IP address, port defaults to 
+				// 27017 or can be changed in second parameter
+				mongo = new Mongo("localhost");
+
+
+				// The db() method on the Mongo object returns a DB object.
+				// Subsequent calls to the db() method with the same string
+				// will return the same DB object instance, so its ok to 
+				// use the db() function more than once, or just store a 
+				// reference to the DB object as a class member. Both 
+				// options are valid and its a matter of personal prefernce.
+				mongoDB = mongo.db("mongoas3_intro");
+			}
+
+			private function connectMongoDB():void
+			{
+				// Add a callback in case the driver fails to establish a connection 
+				// with the MongoDB server.
+				mongoDB.connectionFailed.add(onConnectionFailed);
+
+
+				// Add a callback for when the driver establishes a connection
+				// with the MongoDB server.
+				mongoDB.connected.add(onConnectedToDB);
+
+
+				// Establishes the initial connection before any operations can be
+				// done on the MongoDB server.
+				mongoDB.connect();
+			}
+
+			private function onConnectionFailed(db:DB):void
+			{
+				Alert.show("Problem connecting to the database.", "Connection Failed");
+			}
+
+			private function onConnectedToDB(db:DB):void
+			{
+				// The Credentials object must be created to authenticate with the MongoDB
+				// server and use the database. Here is an opportunity to establish a secure
+				// connection to a remote API to retrieve credentials for the database via
+				// some kind of exchange similar to OAuth. This way the database credentials
+				// don't have to be compiled into the SWF.
+				var credentials:Credentials = new Credentials("dbUser", "dbPassword");
+				mongoDB.setCredentials(credentials);
+
+
+				// Add a callback function in case that there is a problem authenticating 
+				// the user with the DB object
+				mongoDB.authenticationProblem.add(onAuthenticationProblem);
+
+
+				// Add a callback function for when the user is authenticated with access
+				// to the selected DB object.
+				mongoDB.authenticated.add(onAuthenticated);
+
+
+				// Authenticate the user/password in the Credentials object
+				mongoDB.authenticate();
+			}
+
+			private function onAuthenticationProblem(db:DB):void
+			{
+				Alert.show("Problem authenticating to the database.", "Authentication Problem");
+			}
+
+			private function onAuthenticated(db:DB):void
+			{
+				// The DB has authenticated the Credentials and we are ready to perform
+				// operations on the database and try to log a user in.
+
+				// Now that the MongoDB is ready to be used, add a click listener to the
+				// log in button and enable the login form.
+				ui_btn_login.addEventListener(MouseEvent.CLICK, onLoginClick);
+				loginForm.enabled = true;
+			}
+
+
+
+			private function onLoginClick(event:MouseEvent):void
+			{
+				// Before preparing a query document, encode the password the same 
+				// as it was encoded in the _01_Insert_Document_Example.mxml
+				var base64Encoder:Base64Encoder = new Base64Encoder();
+				base64Encoder.encode(ui_ti_password.text);
+
+
+				// Create a selector document, or a query document. The two key/value
+				// pairs that go into the document are the screenName and the password
+				// from the login form. The password is the encoded value from the Base64Encoder.
+				var selector:Document           = new Document();
+				selector.put("screenName", ui_ti_screenName.text);
+				selector.put("password", base64Encoder.drain());
+
+
+				// Use the findOne() command to attempt to retrieve a user document
+				// with the screen name and password combination entered into the
+				// login form to do an authentication. A callback is added to receive
+				// a FineOneResult object when the MongoDB server responds.
+				mongoDB.collection("users").findOne(selector).add(onFindOneResult);
+			}
+
+			private function onFindOneResult(findOneResult:FindOneResult):void
+			{
+				// The callback function can use the FindOneResult object to check
+				// the success property to determine if the document was found. If
+				// the success property is true the document will be set in the 
+				// FindOneResult's document property. Otherwise the FindOneResult
+				// document property will be null and success will be false.
+				if (findOneResult.success)
+				{
+					Alert.show("You are now logged in! \n" + ObjectUtil.toString(findOneResult.document), "Login Successful");
+				}
+				else
+				{
+					Alert.show("ScreenName or password are incorrect.", "Login Failed");
+				}
+
+				output.appendText(ObjectUtil.toString(findOneResult));
+			}
+		]]>
+	</fx:Script>
+	<s:layout>
+		<s:HorizontalLayout />
+	</s:layout>
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+	</fx:Declarations>
+
+	<s:Form id="loginForm" enabled="false">
+		<s:FormItem label="ScreenName:">
+			<s:TextInput id="ui_ti_screenName" />
+		</s:FormItem>
+
+		<s:FormItem label="Password:">
+			<s:TextInput id="ui_ti_password" displayAsPassword="true" />
+		</s:FormItem>
+
+		<s:FormItem>
+			<s:Button id="ui_btn_login" label="Login" />
+		</s:FormItem>
+	</s:Form>
+
+	<s:TextArea id="output"
+				editable="false"
+				width="100%"
+				height="100%" />
+
+</s:Application>

@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009"
+			   xmlns:s="library://ns.adobe.com/flex/spark"
+			   xmlns:mx="library://ns.adobe.com/flex/mx"
+			   minWidth="955"
+			   minHeight="600"
+			   creationComplete="onCreationComplete(event)">
+	<fx:Script>
+		<![CDATA[
+			import as3.mongo.Mongo;
+			import as3.mongo.db.DB;
+			import as3.mongo.db.credentials.Credentials;
+			import as3.mongo.db.document.Document;
+			import as3.mongo.wire.messages.database.OpReply;
+
+			import mx.controls.Alert;
+			import mx.events.FlexEvent;
+			import mx.utils.Base64Encoder;
+			import mx.utils.ObjectUtil;
+
+			private var mongo:Mongo;
+			private var mongoDB:DB;
+
+			protected function onCreationComplete(event:FlexEvent):void
+			{
+				// Starts a Mongo object pointed to the correct host (localhost for this example)
+				// and gets a reference to a DB object using the 'mongoas3_intro' database.
+				initializeMongoDB();
+
+
+				// Sets up the connected and connectionFailed signals with callbacks to handle
+				// those callbacks and then establishes a connection with MongoDB.
+				connectMongoDB();
+			}
+
+			private function initializeMongoDB():void
+			{
+				// Change host to your MongoDB IP address, port defaults to 
+				// 27017 or can be changed in second parameter
+				mongo = new Mongo("localhost");
+
+
+				// The db() method on the Mongo object returns a DB object.
+				// Subsequent calls to the db() method with the same string
+				// will return the same DB object instance, so its ok to 
+				// use the db() function more than once, or just store a 
+				// reference to the DB object as a class member. Both 
+				// options are valid and its a matter of personal prefernce.
+				mongoDB = mongo.db("mongoas3_intro");
+			}
+
+			private function connectMongoDB():void
+			{
+				// Add a callback in case the driver fails to establish a connection 
+				// with the MongoDB server.
+				mongoDB.connectionFailed.add(onConnectionFailed);
+
+
+				// Add a callback for when the driver establishes a connection
+				// with the MongoDB server.
+				mongoDB.connected.add(onConnectedToDB);
+
+
+				// Establishes the initial connection before any operations can be
+				// done on the MongoDB server.
+				mongoDB.connect();
+			}
+
+			private function onConnectionFailed(db:DB):void
+			{
+				Alert.show("Problem connecting to the database.", "Connection Failed");
+			}
+
+			private function onConnectedToDB(db:DB):void
+			{
+				// The Credentials object must be created to authenticate with the MongoDB
+				// server and use the database. Here is an opportunity to establish a secure
+				// connection to a remote API to retrieve credentials for the database via
+				// some kind of exchange similar to OAuth. This way the database credentials
+				// don't have to be compiled into the SWF.
+				var credentials:Credentials = new Credentials("dbUser", "dbPassword");
+				mongoDB.setCredentials(credentials);
+
+
+				// Add a callback function in case that there is a problem authenticating 
+				// the user with the DB object
+				mongoDB.authenticationProblem.add(onAuthenticationProblem);
+
+
+				// Add a callback function for when the user is authenticated with access
+				// to the selected DB object.
+				mongoDB.authenticated.add(onAuthenticated);
+
+
+				// Authenticate the user/password in the Credentials object
+				mongoDB.authenticate();
+			}
+
+			private function onAuthenticationProblem(db:DB):void
+			{
+				Alert.show("Problem authenticating to the database.", "Authentication Problem");
+			}
+
+			private function onAuthenticated(db:DB):void
+			{
+				/** Ensure unique fields **/
+				// Create a document with the field you wish to create a unique index for.
+				var keyPattern:Document  = new Document();
+				keyPattern.put("screenName", 1);
+
+				// Create an ensure index Document that will be used to insert an index into
+				// the system.indexes MongoDB collection. 
+				var ensureIndex:Document = new Document();
+				ensureIndex.put("name", "screen_name_index"); // The name string is something you define arbitrarily.
+				ensureIndex.put("ns", "mongoas3_intro.users"); // ns is the namespace, the value format is "database.collection".
+				ensureIndex.put("key", keyPattern); // the key is the keyPattern Document object defined for 'screenName' in this example
+				ensureIndex.put("unique", true); // This property ensures that the field is a unique index, and not just indexed
+				ensureIndex.put("dropDups", true); // This property will drop documents that have duplicated keys in the new index. Be careful with this command.
+
+
+				// Use the system.indexes command to insert the ensureIndex Document. This
+				// command only works with MongoAS3 v.0.3 and up.
+				mongoDB.collection("system.indexes").insert(ensureIndex);
+
+
+				// Check the status of the ensure index command. This is optional, I added
+				// it just for demo purposes.
+				mongoDB.runCommand(new Document("getlasterror:")).addOnce(onCheckEnsureIndexErrorReply);
+
+
+
+				// The DB has authenticated the Credentials and we are ready to perform
+				// operations on the database. The register button gets enabled.
+				ui_btn_register.addEventListener(MouseEvent.CLICK, onRegisterClick);
+				ui_btn_register.enabled = true;
+			}
+
+			protected function onRegisterClick(event:MouseEvent):void
+			{
+				// Basic encoding of the password so its not saved unsecurely. More 
+				// adequate would be to use an MD5 or SHA encryption from as3crypto
+				var base64Encoder:Base64Encoder = new Base64Encoder();
+				base64Encoder.encode(ui_ti_password.text);
+
+
+				// The Document class is used to transfer data over to MongoDB via
+				// the BSON protocol. The Document that is declared below is equivalent
+				// to its JSON representation:
+				// {firstName:"first", lastName:"last", screenName:"screenname", password:"encoded pw"}
+				// In BSON the order of the arguments in the 'JSON' structure matter.
+				// Hence the put() method is used to create key/value pairs that are ordinal.
+				// This matters most when dealing with MongoDB commands.
+				var document:Document           = new Document();
+				document.put("firstName", ui_ti_firstName.text);
+				document.put("lastName", ui_ti_lastName.text);
+				document.put("screenName", ui_ti_screenName.text);
+				document.put("password", base64Encoder.drain());
+
+
+				// This is the actual call to store the Document object in the database. The
+				// collection() method works the same as the db() method. Subsequent calls
+				// to the collection("users") method always returns the same instance of
+				// the Collection object.
+				mongoDB.collection("users").insert(document);
+
+
+				// The insert() operation does not generate a reply. A db command
+				// must be run to check the status of the last operation.
+				mongoDB.runCommand(new Document("getlasterror:")).addOnce(onInsertErrorCheckResponse);
+			}
+
+			private function onInsertErrorCheckResponse(reply:OpReply):void
+			{
+				// Prints the OpReply object to the output window with
+				// human readable formatting.
+				output.appendText(ObjectUtil.toString(reply));
+
+
+				// If you wanted to check for success:
+				if (reply.documents[0].ok == 1)
+				{
+					// Success
+					Alert.show("Registered user to the database.", "Insert Success");
+
+					clearRegistrationForm();
+				}
+				else
+				{
+					// Failure
+					// Data would return in reply.documents[0].err
+				}
+			}
+
+			private function clearRegistrationForm():void
+			{
+				ui_ti_confirmPassword.text = "";
+				ui_ti_firstName.text = "";
+				ui_ti_lastName.text = "";
+				ui_ti_password.text = "";
+				ui_ti_screenName.text = "";
+			}
+
+			private function onCheckEnsureIndexErrorReply(opReply:OpReply):void
+			{
+				Alert.show(ObjectUtil.toString(opReply), "Check ensureIndex command reply");
+			}
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+	</fx:Declarations>
+
+	<s:layout>
+		<s:HorizontalLayout />
+	</s:layout>
+
+	<s:Form>
+		<s:FormItem label="First Name:">
+			<s:TextInput id="ui_ti_firstName" />
+		</s:FormItem>
+
+		<s:FormItem label="Last Name:">
+			<s:TextInput id="ui_ti_lastName" />
+		</s:FormItem>
+
+		<s:FormItem label="Screen Name:">
+			<s:TextInput id="ui_ti_screenName" />
+		</s:FormItem>
+
+		<s:FormItem label="Password:">
+			<s:TextInput id="ui_ti_password" displayAsPassword="true" />
+		</s:FormItem>
+
+		<s:FormItem label="Confirm Password:">
+			<s:TextInput id="ui_ti_confirmPassword" displayAsPassword="true" />
+		</s:FormItem>
+
+		<s:FormItem>
+			<s:Button id="ui_btn_register"
+					  label="Register"
+					  enabled="false" />
+		</s:FormItem>
+	</s:Form>
+
+	<s:TextArea id="output"
+				editable="false"
+				width="100%"
+				height="100%" />
+
+</s:Application>
